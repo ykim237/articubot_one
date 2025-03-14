@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      text-align: center; 
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+    .controls { 
+      margin: 20px auto; 
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-gap: 10px;
+      max-width: 320px;
+    }
+    button {
+      width: 100px; 
+      height: 100px; 
+      font-size: 28px;
+      border-radius: 50%; 
+      border: none;
+      background-color: #2196F3; 
+      color: white;
+      touch-action: manipulation;
+      cursor: pointer;
+      transition: transform 0.1s, background-color 0.2s;
+    }
+    button:active {
+      transform: scale(0.95);
+      background-color: #0b7dda;
+    }
+    button.active {
+      background-color: #0b7dda;
+      transform: scale(0.95);
+      box-shadow: inset 0 0 10px rgba(0,0,0,0.2);
+    }
+    #stop { 
+      background-color: #f44336; 
+      grid-column: 2;
+      grid-row: 2;
+    }
+    #forward { 
+      grid-column: 2;
+      grid-row: 1;
+    }
+    #backward { 
+      grid-column: 2;
+      grid-row: 3;
+    }
+    #left { 
+      grid-column: 1;
+      grid-row: 2;
+    }
+    #right { 
+      grid-column: 3;
+      grid-row: 2;
+    }
+    .status-panel {
+      background-color: #eee;
+      padding: 10px;
+      border-radius: 5px;
+      margin-bottom: 15px;
+    }
+    #status {
+      font-weight: bold;
+      color: #555;
+    }
+    #log { 
+      height: 120px; 
+      overflow-y: scroll; 
+      border: 1px solid #ddd; 
+      margin: 10px 0; 
+      padding: 10px; 
+      text-align: left;
+      font-family: monospace;
+      font-size: 12px;
+      background-color: #f9f9f9;
+    }
+    .slider-container {
+      margin: 20px 0;
+    }
+    .slider-container label {
+      display: block;
+      text-align: left;
+      margin-bottom: 5px;
+    }
+    input[type="range"] {
+      width: 100%;
+    }
+    .value-display {
+      font-weight: bold;
+      color: #2196F3;
+    }
+    .freq-container {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Robot Control</h1>
+    
+    <div class="status-panel">
+      <div id="status">Connecting to ROS...</div>
+    </div>
+    
+    <div class="slider-container">
+      <label>Linear Speed: <span id="linear-value" class="value-display">0.4</span> m/s</label>
+      <input type="range" id="linear-speed" min="0.1" max="1.0" step="0.1" value="0.4">
+    </div>
+    
+    <div class="slider-container">
+      <label>Angular Speed: <span id="angular-value" class="value-display">0.8</span> rad/s</label>
+      <input type="range" id="angular-speed" min="0.1" max="1.5" step="0.1" value="0.8">
+    </div>
+    
+    <div class="freq-container">
+      Command frequency: <span id="freq-value">10</span> Hz
+      <input type="range" id="frequency" min="5" max="20" step="1" value="10" style="width: 100%;">
+    </div>
+    
+    <div class="controls">
+      <button id="forward">↑</button>
+      <button id="left">←</button>
+      <button id="stop">■</button>
+      <button id="right">→</button>
+      <button id="backward">↓</button>
+    </div>
+    
+    <div id="log">Log messages will appear here...</div>
+  </div>
+  
+  <script>
+    // WebSocket connection
+    let ws = null;
+    let isConnected = false;
+    
+    // Speed settings
+    let linearSpeed = 0.4;
+    let angularSpeed = 0.8;
+    let commandFrequency = 10; // Hz
+    
+    // Movement state
+    let currentLinear = 0;
+    let currentAngular = 0;
+    let commandInterval = null;
+    let activeButton = null;
+    
+    // Update speed values when sliders change
+    document.getElementById('linear-speed').addEventListener('input', function(e) {
+      linearSpeed = parseFloat(e.target.value);
+      document.getElementById('linear-value').textContent = linearSpeed;
+      
+      // Update movement if a button is active
+      if (activeButton) {
+        updateMovement();
+      }
+    });
+    
+    document.getElementById('angular-speed').addEventListener('input', function(e) {
+      angularSpeed = parseFloat(e.target.value);
+      document.getElementById('angular-value').textContent = angularSpeed;
+      
+      // Update movement if a button is active
+      if (activeButton) {
+        updateMovement();
+      }
+    });
+    
+    document.getElementById('frequency').addEventListener('input', function(e) {
+      commandFrequency = parseInt(e.target.value);
+      document.getElementById('freq-value').textContent = commandFrequency;
+      
+      // Restart command interval if it's running
+      if (commandInterval) {
+        clearInterval(commandInterval);
+        startCommandInterval();
+      }
+    });
+    
+    // Logging function
+    function log(message) {
+      const logDiv = document.getElementById('log');
+      const timestamp = new Date().toLocaleTimeString();
+      logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+    
+    // Connect to ROS
+    function connect() {
+      ws = new WebSocket('ws://192.168.1.78:9090');
+      
+      ws.onopen = function() {
+        isConnected = true;
+        document.getElementById('status').innerHTML = 'Connected to ROS';
+        log('Connected to ROS bridge server.');
+        
+        // Check if target topic exists
+        checkTopics();
+        
+        // Start command interval
+        startCommandInterval();
+      };
+      
+      ws.onerror = function(error) {
+        isConnected = false;
+        document.getElementById('status').innerHTML = 'Error connecting to ROS';
+        log('Error connecting to ROS bridge: ' + error);
+      };
+      
+      ws.onclose = function() {
+        isConnected = false;
+        document.getElementById('status').innerHTML = 'Connection closed';
+        log('Connection to ROS bridge closed.');
+        
+        // Clear command interval
+        if (commandInterval) {
+          clearInterval(commandInterval);
+          commandInterval = null;
+        }
+        
+        // Try to reconnect after 5 seconds
+        setTimeout(connect, 5000);
+      };
+      
+      ws.onmessage = function(event) {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.op === 'service_response' && data.id && data.id.startsWith('topic_list')) {
+            handleTopicList(data);
+          }
+        } catch (e) {
+          log('Error parsing message: ' + e);
+        }
+      };
+    }
+    
+    // Start command interval
+    function startCommandInterval() {
+      if (commandInterval) {
+        clearInterval(commandInterval);
+      }
+      
+      const intervalTime = Math.floor(1000 / commandFrequency);
+      commandInterval = setInterval(function() {
+        sendMovementCommand();
+      }, intervalTime);
+      
+      log(`Command interval started (${commandFrequency} Hz)`);
+    }
+    
+    // Check available topics
+    function checkTopics() {
+      if (!isConnected) return;
+      
+      const topicRequest = {
+        op: 'call_service',
+        service: '/rosapi/topics',
+        args: {},
+        id: 'topic_list_' + Date.now()
+      };
+      
+      try {
+        ws.send(JSON.stringify(topicRequest));
+        log('Requested topic list');
+      } catch (e) {
+        log('Error requesting topics: ' + e);
+      }
+    }
+    
+    // Handle topic list response
+    function handleTopicList(data) {
+      if (data.values && data.values.topics) {
+        const topics = data.values.topics;
+        log('Received list of ' + topics.length + ' topics');
+        
+        if (topics.includes('/diff_cont/cmd_vel_unstamped')) {
+          log('✅ Target topic found and available');
+        } else {
+          log('⚠️ Target topic not found in available topics');
+        }
+      }
+    }
+    
+    // Update movement state
+    function updateMovement() {
+      if (activeButton === 'forward') {
+        currentLinear = linearSpeed;
+        currentAngular = 0;
+      } else if (activeButton === 'backward') {
+        currentLinear = -linearSpeed;
+        currentAngular = 0;
+      } else if (activeButton === 'left') {
+        currentLinear = 0;
+        currentAngular = angularSpeed;
+      } else if (activeButton === 'right') {
+        currentLinear = 0;
+        currentAngular = -angularSpeed;
+      } else if (activeButton === 'stop') {
+        currentLinear = 0;
+        currentAngular = 0;
+      }
+    }
+    
+    // Send movement command
+    function sendMovementCommand() {
+      if (!isConnected) return;
+      
+      const msg = {
+        op: 'publish',
+        topic: '/diff_cont/cmd_vel_unstamped',
+        msg: {
+          linear: { x: currentLinear, y: 0, z: 0 },
+          angular: { x: 0, y: 0, z: currentAngular }
+        }
+      };
+      
+      try {
+        ws.send(JSON.stringify(msg));
+        // Only log occasionally to avoid flooding
+        if (Math.random() < 0.1) {
+          log(`Sending: linear=${currentLinear}, angular=${currentAngular}`);
+        }
+      } catch (e) {
+        log('Error sending command: ' + e);
+      }
+    }
+    
+    // Button event handlers
+    function setupButton(id) {
+      const button = document.getElementById(id);
+      
+      // Handle both mouse and touch events
+      ['touchstart', 'mousedown'].forEach(function(eventType) {
+        button.addEventListener(eventType, function(e) {
+          e.preventDefault();
+          
+          // Mark button as active
+          if (activeButton) {
+            document.getElementById(activeButton).classList.remove('active');
+          }
+          
+          activeButton = id;
+          button.classList.add('active');
+          
+          // Update movement
+          updateMovement();
+          
+          // Send command immediately
+          sendMovementCommand();
+          
+          log(`Button ${id} pressed`);
+        });
+      });
+      
+      ['touchend', 'mouseup', 'mouseleave'].forEach(function(eventType) {
+        button.addEventListener(eventType, function(e) {
+          e.preventDefault();
+          
+          // Only respond if this is the active button
+          if (activeButton === id) {
+            // If it's the stop button, keep it active
+            if (id !== 'stop') {
+              button.classList.remove('active');
+              activeButton = null;
+              
+              // Stop movement
+              currentLinear = 0;
+              currentAngular = 0;
+              
+              // Send stop command immediately
+              sendMovementCommand();
+              
+              log(`Button ${id} released, movement stopped`);
+            }
+          }
+        });
+      });
+    }
+    
+    // Set up control buttons
+    setupButton('forward');
+    setupButton('backward');
+    setupButton('left');
+    setupButton('right');
+    setupButton('stop');
+    
+    // Start connection
+    connect();
+  </script>
+</body>
+</html>

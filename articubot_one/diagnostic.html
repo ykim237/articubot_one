@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/roslibjs@1.1.0/build/roslib.min.js"></script>
+  <style>
+    button { width: 100px; height: 50px; margin: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Simple Robot Test</h1>
+  <div id="status">Connecting...</div>
+  <button id="forward">FORWARD</button>
+  <button id="stop">STOP</button>
+
+  <script>
+    // Raw WebSocket approach
+    var ws = new WebSocket('ws://192.168.1.78:9090');
+    
+    ws.onopen = function() {
+      document.getElementById('status').textContent = 'Connected!';
+      
+      // Set up button handlers
+      document.getElementById('forward').addEventListener('click', function() {
+        var msg = {
+          op: 'publish',
+          topic: '/diff_cont/cmd_vel_unstamped',
+          msg: {
+            linear: { x: 0.5, y: 0, z: 0 },
+            angular: { x: 0, y: 0, z: 0 }
+          }
+        };
+        ws.send(JSON.stringify(msg));
+      });
+      
+      document.getElementById('stop').addEventListener('click', function() {
+        var msg = {
+          op: 'publish',
+          topic: '/diff_cont/cmd_vel_unstamped',
+          msg: {
+            linear: { x: 0, y: 0, z: 0 },
+            angular: { x: 0, y: 0, z: 0 }
+          }
+        };
+        ws.send(JSON.stringify(msg));
+      });
+    };
+    
+    ws.onerror = function(error) {
+      document.getElementById('status').textContent = 'Error: ' + error;
+    };
+    
+    ws.onclose = function() {
+      document.getElementById('status').textContent = 'Disconnected';
+    };
+  </script>
+</body>
+</html>
