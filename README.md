@@ -1,4 +1,4 @@
-## Robot Package Template
+## articubot mobile control
 
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml address:=0.0.0.0 port:=9090 debug:=true
 
